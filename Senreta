@@ -1,0 +1,155 @@
+import customtkinter
+import yt_dlp
+from pathlib import Path
+import threading
+import re
+from PIL import ImageTk, Image
+import requests
+from io import BytesIO
+from tkinter import filedialog
+
+# --- CONFIGURAÇÃO INICIAL ---
+
+customtkinter.set_appearance_mode("dark")
+customtkinter.set_default_color_theme("blue")
+
+app = customtkinter.CTk()
+app.geometry("820x650")
+app.title("🎧 Senreta - Downloader de Músicas")
+app.iconbitmap("senreta.ico")  # <-- Use a imagem convertida para .ico com esse nome
+
+formato_audio = customtkinter.StringVar(value="mp3")
+pasta_destino = Path.home() / "Downloads"
+
+# --- INTERFACE ---
+
+frame = customtkinter.CTkFrame(app)
+frame.pack(padx=20, pady=20, fill="both", expand=True)
+
+titulo_label = customtkinter.CTkLabel(frame, text="🔗 Insira o link da música ou playlist do YouTube", font=("Arial", 18))
+titulo_label.pack(pady=(10, 5))
+
+link_entry = customtkinter.CTkEntry(frame, placeholder_text="Cole seu link aqui...", width=500, height=35)
+link_entry.pack(pady=10)
+
+# Opções de formato
+formato_label = customtkinter.CTkLabel(frame, text="🎼 Formato:")
+formato_label.pack()
+formato_menu = customtkinter.CTkOptionMenu(frame, variable=formato_audio, values=["mp3", "wav", "aac"])
+formato_menu.pack(pady=(0, 10))
+
+# Escolher pasta
+def escolher_pasta():
+    global pasta_destino
+    caminho = filedialog.askdirectory()
+    if caminho:
+        pasta_destino = Path(caminho)
+        pasta_label.configure(text=f"Pasta: {pasta_destino}")
+
+escolher_pasta_btn = customtkinter.CTkButton(frame, text="📂 Escolher Pasta de Download", command=escolher_pasta)
+escolher_pasta_btn.pack(pady=(5, 10))
+
+pasta_label = customtkinter.CTkLabel(frame, text=f"Pasta: {pasta_destino}")
+pasta_label.pack()
+
+# Botão de download
+download_button = customtkinter.CTkButton(frame, text="⬇️ Baixar", command=lambda: iniciar_download())
+download_button.pack(pady=15)
+
+# Barra de progresso
+progress_bar = customtkinter.CTkProgressBar(frame, width=500)
+progress_bar.set(0)
+progress_bar.pack(pady=10)
+
+# Miniatura e status
+thumbnail_label = customtkinter.CTkLabel(frame, text="")
+thumbnail_label.pack(pady=(5, 0))
+
+status_detalhado_label = customtkinter.CTkLabel(frame, text="", font=("Arial", 14))
+status_detalhado_label.pack(pady=(10, 5))
+
+status_label = customtkinter.CTkLabel(frame, text="", font=("Arial", 14))
+status_label.pack(pady=(5, 10))
+
+# Rodapé com nome do criador
+rodape = customtkinter.CTkLabel(frame, text="Feito com ❤️ por Lexfive", font=("Arial", 12))
+rodape.pack(pady=(30, 10))
+
+# --- PROGRESSO ---
+
+def meu_hook_de_progresso(d):
+    if d['status'] == 'downloading':
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        porcentagem_str = ansi_escape.sub('', d['_percent_str']).strip()
+        try:
+            porcentagem_float = float(porcentagem_str.replace('%','')) / 100
+            progress_bar.set(porcentagem_float)
+            status_detalhado_label.configure(text=f"Baixando... {porcentagem_str}")
+        except ValueError:
+            pass
+    if d['status'] == 'finished':
+        status_detalhado_label.configure(text="Download concluído. Convertendo para áudio...")
+
+# --- DOWNLOAD ---
+
+def fazer_download():
+    link = link_entry.get().strip()
+    if not link:
+        status_label.configure(text="Erro: Por favor, insira um link.", text_color="red")
+        return
+
+    status_label.configure(text="")
+    status_detalhado_label.configure(text="")
+    progress_bar.set(0)
+    download_button.configure(state="disabled")
+
+    try:
+        formato = formato_audio.get()
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': formato,
+                'preferredquality': '320',
+            }],
+            'outtmpl': str(pasta_destino / '%(title)s.%(ext)s'),
+            'progress_hooks': [meu_hook_de_progresso],
+            'ignoreerrors': True,
+            'noplaylist': False,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(link, download=False)
+            video = info['entries'][0] if 'entries' in info else info
+
+            title = video.get('title', 'Sem título')
+            thumbnail_url = video.get('thumbnail')
+            status_label.configure(text=f"Baixando: {title}", text_color="white")
+
+            if thumbnail_url:
+                try:
+                    response = requests.get(thumbnail_url)
+                    image_data = Image.open(BytesIO(response.content))
+                    image_data = image_data.resize((320, 180))
+                    photo = ImageTk.PhotoImage(image_data)
+                    thumbnail_label.configure(image=photo, text="")
+                    thumbnail_label.image = photo
+                except:
+                    thumbnail_label.configure(text="(Erro ao carregar miniatura)", image="")
+
+            ydl.download([link])
+        status_label.configure(text="✅ Download Concluído!", text_color="green")
+        status_detalhado_label.configure(text="")
+    except Exception as e:
+        status_label.configure(text=f"Erro: {e}", text_color="red")
+        print(e)
+    finally:
+        download_button.configure(state="normal")
+
+# --- THREAD ---
+
+def iniciar_download():
+    threading.Thread(target=fazer_download, daemon=True).start()
+
+# --- MAIN ---
+app.mainloop()
